@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Sous-titres</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Réglages via l'URL : /overlay?size=56&bottom=6&box=0&color=%23ffffff&debug=1 */
+  :root {
+    --size: 52px;
+    --bottom: 7%;
+    --color: #fff;
+    --box: rgba(8, 10, 14, .62);
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body.debug { background: #3a6b4f; }
+  #wrap {
+    position: fixed; left: 0; right: 0; bottom: var(--bottom);
+    display: flex; justify-content: center; padding: 0 5%;
+  }
+  #sub {
+    max-width: 92%;
+    padding: .28em .7em .34em;
+    border-radius: .22em;
+    background: var(--box);
+    color: var(--color);
+    font: 600 var(--size)/1.28 "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    text-align: center;
+    text-shadow: 0 2px 6px rgba(0,0,0,.55);
+    opacity: 0;
+    transition: opacity .18s ease-out;
+  }
+  #sub.visible { opacity: 1; }
+  #sub.nobox { background: transparent; text-shadow: 0 0 6px #000, 0 2px 4px #000, 0 0 2px #000; }
+  @media (prefers-reduced-motion: reduce) { #sub { transition: none; } }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="sub" aria-live="polite"></div></div>
+<script>
+const q = new URLSearchParams(location.search);
+const root = document.documentElement.style;
+if (q.get('size')) root.setProperty('--size', q.get('size') + 'px');
+if (q.get('bottom')) root.setProperty('--bottom', q.get('bottom') + '%');
+if (q.get('color')) root.setProperty('--color', q.get('color'));
+if (q.get('debug')) document.body.classList.add('debug');
+const el = document.getElementById('sub');
+if (q.get('box') === '0') el.classList.add('nobox');
+
+const MIN_SHOW_MS = Number(q.get('min') || 1500);   // durée minimale d'un sous-titre
+const HOLD_MS = Number(q.get('hold') || 5000);      // disparition après inactivité
+
+let shown = { id: null, since: 0 };
+let pending = null, switchTimer = null, holdTimer = null;
+
+function render(lines, dir) {
+  el.dir = dir || 'ltr';
+  el.replaceChildren(...lines.map(l => { const d = document.createElement('div'); d.textContent = l; return d; }));
+  el.classList.add('visible');
+}
+function apply(m) {
+  if (m.segment_id !== shown.id) shown = { id: m.segment_id, since: Date.now() };
+  render(m.lines, m.dir);
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => { el.classList.remove('visible'); shown = { id: null, since: 0 }; }, HOLD_MS);
+}
+function onUpdate(m) {
+  if (!m.lines || !m.lines.length) return;
+  if (m.segment_id === shown.id) { apply(m); return; }
+  const wait = shown.since + MIN_SHOW_MS - Date.now();
+  if (shown.id && wait > 0) {          // le sous-titre courant n'a pas été affiché assez longtemps
+    pending = m;                       // on ne garde que le plus récent
+    clearTimeout(switchTimer);
+    switchTimer = setTimeout(() => { const p = pending; pending = null; if (p) apply(p); }, wait);
+    return;
+  }
+  apply(m);
+}
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/subtitles` + (q.get('token') ? `?token=${encodeURIComponent(q.get('token'))}` : ''));
+  ws.onmessage = e => { const m = JSON.parse(e.data); if (m.type === 'subtitle.update') onUpdate(m); };
+  ws.onclose = () => setTimeout(connect, 1000);
+  ws.onerror = () => ws.close();
+}
+connect();
+</script>
+</body>
+</html>
